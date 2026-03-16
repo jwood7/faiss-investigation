@@ -249,11 +249,17 @@ struct HNSWStats {
             0; /// number of queries for which the candidate list is exhausted
     size_t ndis = 0;  /// number of distances computed
     size_t nhops = 0; /// number of hops aka number of edges traversed
+    std::vector<faiss::idx_t> upper_path_nodes; // node ids, in order
+    std::vector<int>          upper_path_level; // level of each node in the path
+    std::vector<faiss::idx_t> lower_popped_nodes; // lower level node ids, in order
+    std::vector<float>        lower_popped_dis; // distance of popped node from query
 
     void reset() {
         n1 = n2 = 0;
         ndis = 0;
         nhops = 0;
+        upper_path_nodes.clear();
+        upper_path_level.clear();
     }
 
     void combine(const HNSWStats& other) {
@@ -261,6 +267,16 @@ struct HNSWStats {
         n2 += other.n2;
         ndis += other.ndis;
         nhops += other.nhops;
+        // append trace
+        upper_path_nodes.insert(
+            upper_path_nodes.end(),
+            other.upper_path_nodes.begin(),
+            other.upper_path_nodes.end());
+    
+        upper_path_level.insert(
+            upper_path_level.end(),
+            other.upper_path_level.begin(),
+            other.upper_path_level.end());
     }
 };
 

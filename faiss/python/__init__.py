@@ -86,6 +86,13 @@ for symbol in dir(this_module):
         if issubclass(the_class, CodePacker):
             class_wrappers.handle_CodePacker(the_class)
 
+def _search_with_extra(self, x, k, *, params=None, D=None, I=None, numeric_type=Float32):
+    D, I = self.search(x, k, params=params, D=D, I=I, numeric_type=numeric_type)
+    extra = self.search_extra() if hasattr(self, "search_extra") else None
+    return D, I, extra
+
+Index.search_with_extra = _search_with_extra
+
 ##############################################################################
 # For some classes (IndexIVF, IDSelector), the object holds a reference to
 # a C++ object (eg. the quantizer object of IndexIVF). We don't transfer the

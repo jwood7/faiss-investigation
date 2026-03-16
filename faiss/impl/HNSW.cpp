@@ -23,6 +23,32 @@
 #include <limits>
 #include <type_traits>
 #endif
+#include <cstdio>
+#include <cstdlib>
+#include <cstdarg>
+
+static void faiss_debug_write(const char* fmt, ...) {
+    const char* tmp = std::getenv("TEMP");
+    if (!tmp) return;
+
+    char path[512];
+    std::snprintf(path, sizeof(path), "%s\\faiss_debug.txt", tmp);
+
+    FILE* f = std::fopen(path, "ab");
+    if (!f) return;
+
+    char buffer[1024];
+
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+
+    std::fwrite(buffer, 1, std::strlen(buffer), f);
+    std::fwrite("\n", 1, 1, f);
+
+    std::fclose(f);
+}
 
 namespace faiss {
 
@@ -651,7 +677,19 @@ int search_from_candidates(
     while (candidates.size() > 0) {
         float d0 = 0;
         int v0 = candidates.pop_min(&d0);
+        if (level == 0) {
+            stats.lower_popped_nodes.push_back(v0);   // or idx_t(v0)
+            stats.lower_popped_dis.push_back(d0);     // optional
+        }
 
+        faiss_debug_write(
+            "POP level=%d step=%d node=%d dist=%f candidates=%d",
+            level,
+            nstep,
+            v0,
+            d0,
+            candidates.size()
+        );
         if (do_dis_check) {
             // tricky stopping condition: there are more that ef
             // distances that are processed already that are smaller
@@ -659,6 +697,13 @@ int search_from_candidates(
 
             int n_dis_below = candidates.count_below(d0);
             if (n_dis_below >= efSearch) {
+                faiss_debug_write(
+                    "STOP dis_check step=%d d0=%f n_dis_below=%f efSearch=%d",
+                    nstep,
+                    d0,
+                    n_dis_below,
+                    efSearch
+                );
                 break;
             }
         }
@@ -703,7 +748,13 @@ int search_from_candidates(
             vt.set(v1);
             saved_j[counter] = v1;
             counter += vget ? 0 : 1;
-
+            
+            faiss_debug_write(
+                "  EXPAND from=%d to=%d visited=%d",
+                v0,
+                v1,
+                vget
+            );
             if (counter == 4) {
                 float dis[4];
                 qdis.distances_batch_4(
@@ -718,6 +769,11 @@ int search_from_candidates(
 
                 for (size_t id4 = 0; id4 < 4; id4++) {
                     add_to_heap(saved_j[id4], dis[id4]);
+                    faiss_debug_write(
+                        " Added %d neighbor with distance %f",
+                        saved_j[id4],
+                        dis[id4]
+                    );
                 }
 
                 ndis += 4;
@@ -729,12 +785,22 @@ int search_from_candidates(
         for (size_t icnt = 0; icnt < counter; icnt++) {
             float dis = qdis(saved_j[icnt]);
             add_to_heap(saved_j[icnt], dis);
+            faiss_debug_write(
+                " Added %d neighbor with distance %f",
+                saved_j[icnt],
+                dis
+            );
 
             ndis += 1;
         }
 
         nstep++;
         if (!do_dis_check && nstep > efSearch) {
+            faiss_debug_write(
+                "STOP step_limit step=%d efSearch=%d",
+                nstep,
+                efSearch
+            );
             break;
         }
     }
@@ -1108,6 +1174,16 @@ HNSWStats greedy_update_nearest(
         storage_idx_t& nearest,
         float& d_nearest) {
     HNSWStats stats;
+    if (stats.upper_path_nodes.empty()) {
+        stats.upper_path_nodes.push_back((faiss::idx_t)nearest);
+        stats.upper_path_level.push_back(level);
+    }
+
+    faiss_debug_write(
+        "Greedy Update Nearest Started level=%d nearest=%d",
+        level,
+        nearest
+    );
 
     for (;;) {
         storage_idx_t prev_nearest = nearest;
@@ -1122,9 +1198,23 @@ HNSWStats greedy_update_nearest(
         auto update_with_candidate = [&](const storage_idx_t idx,
                                          const float dis) {
             if (dis < d_nearest) {
+                faiss_debug_write(
+                    "dis (%f) < d_nearest (%f) True, new nearest %d from %d",
+                    dis,
+                    d_nearest,
+                    idx,
+                    nearest
+                );
                 nearest = idx;
                 d_nearest = dis;
             }
+            faiss_debug_write(
+                "dis (%f) < d_nearest (%f) False, nearest remains %d instead of %d",
+                dis,
+                d_nearest,
+                nearest,
+                idx
+            );
         };
 
         int n_buffered = 0;
@@ -1171,8 +1261,18 @@ HNSWStats greedy_update_nearest(
         stats.nhops += 1;
 
         if (nearest == prev_nearest) {
+            
+            faiss_debug_write(
+                "nearest == prev_nearest, exiting greedy_update"
+            );
             return stats;
+        }else{
+            stats.upper_path_nodes.push_back((faiss::idx_t)nearest);
+            stats.upper_path_level.push_back(level);
         }
+        faiss_debug_write(
+            "Greedy Nearest Loop completed"
+        );
     }
 }
 
@@ -1199,9 +1299,17 @@ HNSWStats HNSW::search(
         VisitedTable& vt,
         const SearchParameters* params) const {
     HNSWStats stats;
-    if (entry_point == -1) {
-        return stats;
+    static bool cleared = false;
+    if (!cleared) {
+        const char* tmp = std::getenv("TEMP");
+        if (tmp) {
+            char path[512];
+            std::snprintf(path, sizeof(path), "%s\\faiss_debug.txt", tmp);
+            std::remove(path);
+        }
+        cleared = true;
     }
+    faiss_debug_write("Starting search");
     int k = extract_k_from_ResultHandler(res);
 
     bool bounded_queue = this->search_bounded_queue;

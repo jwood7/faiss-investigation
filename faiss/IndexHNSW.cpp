@@ -255,6 +255,31 @@ void hnsw_search(
             efSearch = hnsw_params->efSearch;
         }
     }
+
+    // ---------- NEW: tracing-safe fast path for n == 1 ----------
+    // This avoids OpenMP mixing and preserves vector trace order.
+    if (n == 1) {
+        VisitedTable vt(index->ntotal);
+        typename BlockResultHandler::SingleResultHandler res(bres);
+
+        std::unique_ptr<DistanceComputer> dis(
+                storage_distance_computer(index->storage));
+
+        res.begin(0);
+        dis->set_query(x);
+
+        HNSWStats stats = hnsw.search(*dis, index, res, vt, params);
+
+        // Save full stats (including vectors) on the index.
+        // last_search_stats must be 'mutable' because index is const.
+        index->last_search_stats = stats;
+
+        res.end();
+        return;
+    }
+    // ---------- end new fast path ----------
+
+    // Existing reduction / batching path (numeric stats only)
     size_t n1 = 0, n2 = 0, ndis = 0, nhops = 0;
 
     idx_t check_period = InterruptCallback::get_period_hint(
@@ -281,12 +306,15 @@ void hnsw_search(
                 n2 += stats.n2;
                 ndis += stats.ndis;
                 nhops += stats.nhops;
+
                 res.end();
             }
         }
         InterruptCallback::check();
     }
 
+    // If you still keep a global cumulative stats object somewhere,
+    // you can keep this:
     hnsw_stats.combine({n1, n2, ndis, nhops});
 }
 
@@ -312,6 +340,67 @@ void IndexHNSW::search(
             distances[i] = -distances[i];
         }
     }
+}
+
+std::string IndexHNSW::search_extra() const {
+    return "test";
+}
+
+std::vector<faiss::idx_t> faiss::IndexHNSW::get_last_upper_path_nodes() const {
+    return last_search_stats.upper_path_nodes;
+}
+
+std::vector<int> faiss::IndexHNSW::get_last_upper_path_levels() const {
+    return last_search_stats.upper_path_level;
+}
+std::vector<long long> IndexHNSW::get_last_upper_path_packed() const {
+    std::vector<long long> out;
+    const auto& nodes = last_search_stats.upper_path_nodes;
+    const auto& lvls  = last_search_stats.upper_path_level;
+
+    size_t m = std::min(nodes.size(), lvls.size());
+    out.reserve(m * 2);
+
+    for (size_t i = 0; i < m; i++) {
+        out.push_back((long long)lvls[i]);   // level
+        out.push_back((long long)nodes[i]);  // node id
+    }
+    return out;
+}
+std::string IndexHNSW::get_last_upper_path_string() const {
+    std::string out;
+
+    const auto& nodes = last_search_stats.upper_path_nodes;
+    const auto& lvls  = last_search_stats.upper_path_level;
+
+    size_t m = std::min(nodes.size(), lvls.size());
+    out.reserve(m * 24);
+
+    for (size_t i = 0; i < m; i++) {
+        out += std::to_string(lvls[i]);
+        out += ",";
+        out += std::to_string((long long)nodes[i]);
+        out += "\n";
+    }
+    return out;
+}
+
+std::string IndexHNSW::get_last_lower_path_string() const {
+    std::string out;
+
+    const auto& distances = last_search_stats.lower_popped_dis;
+    const auto& nodes  = last_search_stats.lower_popped_nodes;
+
+    size_t m = std::min(nodes.size(), distances.size());
+    out.reserve(m * 24);
+
+    for (size_t i = 0; i < m; i++) {
+        out += std::to_string(distances[i]);
+        out += ",";
+        out += std::to_string((long long)nodes[i]);
+        out += "\n";
+    }
+    return out;
 }
 
 void IndexHNSW::range_search(

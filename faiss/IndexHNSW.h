@@ -18,6 +18,7 @@
 #include <faiss/impl/HNSW.h>
 #include <faiss/impl/Panorama.h>
 #include <faiss/utils/utils.h>
+#include <string>
 
 namespace faiss {
 
@@ -121,6 +122,21 @@ struct IndexHNSW : Index {
     virtual void permute_entries(const idx_t* perm);
 
     DistanceComputer* get_distance_computer() const override;
+
+    std::string search_extra() const;
+
+    
+    mutable HNSWStats last_search_stats;
+    HNSWStats get_last_search_stats() const { return last_search_stats; }
+    std::vector<faiss::idx_t> get_last_upper_path_nodes() const;
+    std::vector<int> get_last_upper_path_levels() const;
+    std::vector<long long> get_last_upper_path_packed() const;
+    std::string get_last_upper_path_string() const;
+    std::string get_last_lower_path_string() const;
+//  list of neighbors viewed
+//  list of neighbors popped
+// Print out everything algorithm is thinking, how big data structures or queues its using are 
+// Send email as soon as done
 };
 
 /** Flat index topped with with a HNSW structure to access elements

@@ -34,7 +34,6 @@ from faiss.loader import (
 # because it is unclear how the conversion should occur: with a view
 # (= cast) or conversion?
 
-
 def _check_dtype_uint8(codes):
     if codes.dtype != 'uint8':
         raise TypeError("Input argument %s must be ndarray of dtype "
@@ -399,6 +398,46 @@ def handle_Index(the_class):
         else:
             self.search_ex(n, swig_ptr(x), numeric_type, k, swig_ptr(D), swig_ptr(I), params)
         return D, I
+
+    def replacement_search_with_extra(self, x, k, *, params=None, D=None, I=None, numeric_type=faiss.Float32):
+        D, I = replacement_search(self, x, k, params=params, D=D, I=I, numeric_type=numeric_type)
+        extra = self.search_extra() if hasattr(self, "search_extra") else None
+        return D, I, extra
+
+    def _swig_vec_to_list(v):
+        n = v.size() if hasattr(v, "size") else len(v)
+        if hasattr(v, "get"):
+            return [v.get(i) for i in range(n)]
+        # fallback: try indexing if present
+        return [v[i] for i in range(n)]
+
+    def replacement_search_with_stats(self, x, k, *, params=None, D=None, I=None, numeric_type=faiss.Float32):
+        D, I = replacement_search(self, x, k, params=params, D=D, I=I, numeric_type=numeric_type)
+        s = self.get_last_search_stats()
+
+        path_s = self.get_last_upper_path_string()
+        upper_path = []
+        for line in path_s.splitlines():
+            if not line:
+                continue
+            lvl, node = line.split(",", 1)
+            upper_path.append((int(lvl), int(node)))
+
+        
+        path_s = self.get_last_lower_path_string()
+        lower_path = []
+        for line in path_s.splitlines():
+            if not line:
+                continue
+            lvl, node = line.split(",", 1)
+            lower_path.append((float(lvl), int(node)))
+
+
+        stats = dict(
+            n1=s.n1, n2=s.n2, ndis=s.ndis, nhops=s.nhops,
+            upper_path=upper_path, lower_path=lower_path
+        )
+        return D, I, stats
 
     def replacement_search_and_reconstruct(self, x, k, *, params=None, D=None, I=None, R=None):
         """Find the k nearest neighbors of the set of vectors x in the index,
@@ -872,6 +911,9 @@ def handle_Index(the_class):
     replace_method(the_class, 'add_sa_codes', replacement_add_sa_codes)
     replace_method(the_class, 'permute_entries', replacement_permute_entries,
                    ignore_missing=True)
+    # Add a new python method without changing Index.search() return type
+    setattr(the_class, 'search_with_extra', replacement_search_with_extra)
+    setattr(the_class, 'search_with_stats', replacement_search_with_stats)
 
     # Store the original __setattr__ method
     original_setattr = (the_class.__setattr__ if
